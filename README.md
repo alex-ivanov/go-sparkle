@@ -45,10 +45,10 @@ up := sparkle.New(sparkle.Config{
     OSVersion:        "14.4",                            // filters sparkle:minimumSystemVersion
 })
 
-rel, err := up.Check(ctx, token) // nil when up to date; ErrUnauthorized on 401/403
+rel, err := up.Check(ctx, token)  // nil when up to date; ErrUnauthorized on 401/403
 if rel != nil {
-    zip, err := up.Download(ctx, rel, token) // Bearer + length + ed25519 verified
-    app, err := sparkle.Apply(zip)           // macOS: swap the .app in place + relaunch
+    path, err := up.Download(ctx, rel, token) // Bearer + length + ed25519 verified
+    app, err := sparkle.Apply(path)           // macOS: swap the .app in place + relaunch
     _ = app
 }
 ```
@@ -129,8 +129,10 @@ byte-identical: a feed signed by Sparkle's `sign_update` verifies here, and a
 feed signed by `sparkle` verifies in Sparkle. This is checked against the
 RFC 8032 standard test vectors (`rfc8032_test.go`).
 
-The artifact is expected to be a **`.zip`** of the `.app` (Sparkle also supports
-DMG; `Apply` handles zips).
+The artifact is a **`.zip`** or **`.dmg`** of the `.app`; `Apply` handles both
+(zip via `ditto`, dmg via a private read-only `hdiutil` mount — sniffed by
+content, not file name). It mounts with `-mountrandom` so an update DMG whose
+volume name matches one the user already has open does not collide.
 
 ## Scope
 
@@ -138,7 +140,7 @@ Implemented: appcast parse (namespaced `sparkle:` elements, item- and
 enclosure-attribute version forms, relative enclosure URLs resolved against the
 feed, `sparkle:channel`, `minimumSystemVersion`, non-`http(s)` enclosure
 rejection); ed25519 verify; token-gated check/download; macOS `.app` swap +
-relaunch; key/sign/feed generation.
+relaunch from a `.zip` or `.dmg`; key/sign/feed generation.
 
 Not implemented (open a PR if you need them): delta updates, phased rollout,
 critical updates, localized release-notes selection, DSA (legacy Sparkle 1.x)
