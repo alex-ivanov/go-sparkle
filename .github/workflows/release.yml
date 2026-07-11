@@ -1,0 +1,46 @@
+name: Release
+
+# Distribution is TAGS-ONLY: consumers run `go get` / `go install ...@version`
+# and build from source. This workflow deliberately does NOT build or upload any
+# binary artifacts (no GoReleaser). On a pushed `v*` tag it runs the full test
+# suite once as a gate and then publishes a GitHub Release with auto-generated
+# notes for that tag.
+on:
+  push:
+    tags:
+      - "v*"
+
+# Least privilege at the top level: nothing here needs write access by default.
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Test gate and publish release
+    # macOS runner: go-sparkle is macOS-targeted, so gate on the same platform
+    # the shipped binaries run on (exercises the *_darwin.go code paths).
+    runs-on: macos-latest
+    # The root suite has a slow test (~20s) and `-race` makes it slower; give it
+    # plenty of headroom.
+    timeout-minutes: 15
+    # Creating a Release requires write access to repository contents.
+    permissions:
+      contents: write
+    # Defense in depth: only ever run for `v*` tag pushes.
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Test (race detector, full suite) as release gate
+        run: go test -race ./...
+
+      - name: Create GitHub Release with auto-generated notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --generate-notes --verify-tag

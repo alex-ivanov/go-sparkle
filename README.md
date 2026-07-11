@@ -1,5 +1,12 @@
 # go-sparkle
 
+[![CI](https://github.com/alex-ivanov/go-sparkle/actions/workflows/ci.yml/badge.svg)](https://github.com/alex-ivanov/go-sparkle/actions/workflows/ci.yml)
+[![Lint](https://github.com/alex-ivanov/go-sparkle/actions/workflows/lint.yml/badge.svg)](https://github.com/alex-ivanov/go-sparkle/actions/workflows/lint.yml)
+[![CodeQL](https://github.com/alex-ivanov/go-sparkle/actions/workflows/codeql.yml/badge.svg)](https://github.com/alex-ivanov/go-sparkle/actions/workflows/codeql.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/alex-ivanov/go-sparkle.svg)](https://pkg.go.dev/github.com/alex-ivanov/go-sparkle)
+[![Go Report Card](https://goreportcard.com/badge/github.com/alex-ivanov/go-sparkle)](https://goreportcard.com/report/github.com/alex-ivanov/go-sparkle)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/alex-ivanov/go-sparkle/blob/main/LICENSE)
+
 A small, dependency-free Go client and toolchain for the
 [Sparkle](https://sparkle-project.org) software-update protocol.
 

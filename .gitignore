@@ -1,0 +1,47 @@
+# JetBrains IDEs (GoLand / IntelliJ)
+.idea/
+*.iml
+
+# Compiled binaries produced by the CLIs at the repo root
+# (`go build ./cmd/sparkle`, `go build ./cmd/sign_update`).
+/sparkle
+/sign_update
+
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binaries, built with `go test -c`
+*.test
+
+# Output of the Go coverage tool
+*.out
+coverage.txt
+coverage.html
+profile.cov
+
+# CPU / memory / other pprof profiles
+*.prof
+
+# Delve debug binaries
+__debug_bin*
+
+# Go workspace files
+go.work
+go.work.sum
+
+# Vendored dependencies (only if `go mod vendor` is ever used)
+/vendor/
+
+# Local environment overrides
+.env
+
+# macOS Finder metadata
+.DS_Store
+
+# Editor swap / backup files
+*.swp
+*~

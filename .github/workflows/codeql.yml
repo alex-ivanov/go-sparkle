@@ -1,0 +1,65 @@
+# CodeQL security analysis for the go-sparkle Go library and CLIs.
+#
+# go-sparkle is macOS-targeted, so analysis runs on macos-latest: the Go
+# extractor sees the *_darwin.go build-tag variants (apply_darwin.go,
+# cmd/sign_update/keychain_darwin.go) that the shipped binaries actually use.
+# The trivial non-darwin stubs (apply_other.go, keychain_other.go) are not
+# analyzed, consistent with the macOS-only CI policy.
+name: "CodeQL"
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  schedule:
+    # Weekly, Mondays at 03:27 UTC (off the top of the hour to avoid contention).
+    - cron: "27 3 * * 1"
+
+# Least-privilege default for the whole workflow; the analyze job widens this
+# to exactly what CodeQL needs.
+permissions:
+  contents: read
+
+# Cancel superseded runs for the same PR / branch so overlapping pushes don't
+# pile up. Uses head_ref for PRs and the full ref otherwise.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (Go)
+    runs-on: macos-latest
+    timeout-minutes: 60
+    permissions:
+      # Required to upload code scanning results (SARIF).
+      security-events: write
+      # Read workflow run metadata CodeQL needs (required for private repos,
+      # harmless on public ones).
+      actions: read
+      # Check out the repository.
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      # Pin the toolchain to the version declared in go.mod (1.26) so autobuild
+      # compiles with the expected compiler. Caching is disabled because the
+      # module has zero third-party dependencies and no go.sum.
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: go
+          build-mode: autobuild
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:go"

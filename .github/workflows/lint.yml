@@ -1,0 +1,36 @@
+name: Lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Least privilege: the linter only needs to read the checked-out code.
+permissions:
+  contents: read
+
+jobs:
+  golangci-lint:
+    name: golangci-lint (macOS)
+    # Run on macOS so the linter type-checks the *_darwin.go build variants
+    # (apply_darwin.go, cmd/sign_update/keychain_darwin.go) that this
+    # macOS-targeted library actually ships.
+    runs-on: macos-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+
+      # golangci-lint-action requires Go to be installed explicitly.
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          # Pin the linter tool version; this resolves to the latest v2.12.x
+          # patch and matches the checked-in .golangci.yml (v2 schema).
+          version: v2.12
+          # The action auto-detects the repo-root .golangci.yml.

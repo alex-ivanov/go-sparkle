@@ -1,0 +1,47 @@
+# golangci-lint configuration (v2 schema).
+# Docs: https://golangci-lint.run/docs/configuration/file/
+version: "2"
+
+linters:
+  # Start from the curated default set (errcheck, govet, ineffassign,
+  # staticcheck, unused) and add a couple of high-signal linters.
+  default: standard
+  enable:
+    - misspell # catches common English misspellings in comments/strings
+    - revive # fast, sensible replacement for the archived golint
+
+  settings:
+    misspell:
+      locale: US
+
+  exclusions:
+    # Keep golangci-lint's lenient handling of generated files.
+    generated: lax
+    # Re-enable golangci-lint's built-in "std error handling" exclusions.
+    # v2 ships default exclusions OFF (unlike v1), so without this errcheck
+    # flags idiomatic `defer f.Close()`, `resp.Body.Close()`, `os.Remove`,
+    # and `fmt.Fprintln/Fprintf` calls. This preset restores those sane
+    # defaults so the linter stays quiet on conventional error handling.
+    presets:
+      - std-error-handling
+    rules:
+      # Test files legitimately ignore some errors (teardown helpers) and use
+      # http.HandlerFunc signatures whose *http.Request param is often unused.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - revive
+      # keychainService is declared in the shared cmd/sign_update/main.go but
+      # only referenced from keychain_darwin.go. On non-darwin builds the
+      # `unused` linter reports a build-tag false positive; silence just that.
+      - path: cmd/sign_update/main\.go
+        linters:
+          - unused
+        text: keychainService
+
+# Formatters run via `golangci-lint fmt` and are also verified by `run`, so a
+# non-gofumpt-clean tree fails CI.
+formatters:
+  enable:
+    - gofmt
+    - gofumpt

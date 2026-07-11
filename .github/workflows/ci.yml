@@ -1,0 +1,84 @@
+name: CI
+
+# Continuous integration for go-sparkle (a macOS-targeted library + CLIs):
+#   * test         — build, vet, and race-tested unit tests on macOS.
+#   * crosscompile — compile-only smoke check that the non-darwin build-tag
+#                    stubs (apply_other.go, cmd/sign_update/keychain_other.go)
+#                    still build for linux/windows. These targets are NOT tested.
+#
+# Formatting (gofmt/gofumpt) and golangci-lint are intentionally NOT run here;
+# the separate Lint workflow (lint.yml) owns static analysis and style checks.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Least privilege: this workflow only reads the repository contents.
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (macOS, Go ${{ matrix.go-version }})
+    runs-on: macos-latest
+    # The root package suite is ~20s wall (has a slow test) and is slower
+    # under -race; 15 minutes leaves ample headroom.
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # The module requires Go >= 1.26 (go.mod), so 1.26.x is the meaningful
+        # version to test. Add '1.27.x' here once Go 1.27 ships. ".x" tracks the
+        # latest patch release.
+        go-version: ['1.26.x']
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ matrix.go-version }}
+          # Cache Go's module and build caches. This repo has no go.sum
+          # (stdlib-only), so setup-go keys the cache on go.mod's hash; if
+          # caching can't run it warns and continues (never fails CI).
+          cache: true
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test (race detector)
+        run: go test -race ./...
+
+  crosscompile:
+    name: cross-compile smoke (${{ matrix.goos }})
+    runs-on: macos-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # Compile-only. The library is macOS-only and these targets are never
+        # tested; building them guarantees the non-darwin build-tag stubs still
+        # compile so they don't silently rot. No cgo is involved (the darwin
+        # keychain shells out to /usr/bin/security), so CGO_ENABLED=0 is fine.
+        goos: [linux, windows]
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Build ${{ matrix.goos }}/amd64 (no cgo)
+        env:
+          CGO_ENABLED: '0'
+          GOOS: ${{ matrix.goos }}
+          GOARCH: amd64
+        run: go build ./...

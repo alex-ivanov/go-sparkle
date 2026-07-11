@@ -1,0 +1,36 @@
+# Dependabot configuration (schema version 2).
+# Docs: https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference
+version: 2
+
+updates:
+  # Keep the GitHub Actions used by our workflows up to date.
+  # "directory: /" points Dependabot at .github/workflows for this ecosystem.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "ci"
+    groups:
+      # Batch low-risk minor and patch action bumps into a single PR.
+      # Major bumps still open individual PRs so they can be reviewed on their own.
+      actions-minor-and-patch:
+        applies-to: version-updates
+        update-types:
+          - "minor"
+          - "patch"
+
+  # Keep Go module dependencies up to date. The module is stdlib-only today,
+  # so this will rarely fire, but it is here for any future third-party deps.
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "deps"
+    groups:
+      gomod-minor-and-patch:
+        applies-to: version-updates
+        update-types:
+          - "minor"
+          - "patch"
