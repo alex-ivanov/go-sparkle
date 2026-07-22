@@ -2,6 +2,8 @@ package sparkle
 
 import (
 	"net/url"
+	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -52,6 +54,10 @@ func TestParseAppcast(t *testing.T) {
 	if a.EnclosureURL != "https://dl.example/App-1.0.zip" || a.EnclosureLength != 111 || a.EDSignature != "c2ln" {
 		t.Fatalf("item 0 enclosure: %+v", a)
 	}
+	// A normal item is not informational and carries no link.
+	if a.Informational || a.Link != "" || len(a.BelowVersions) != 0 {
+		t.Fatalf("item 0 wrongly informational: %+v", a)
+	}
 
 	b := items[1]
 	// version + short live on the enclosure attribute here.
@@ -66,6 +72,179 @@ func TestParseAppcast(t *testing.T) {
 		t.Fatalf("relative URL not resolved: %q", b.EnclosureURL)
 	}
 }
+
+// The literal response a gated distribution service serves when an install's
+// access has lapsed: HTTP 200, a very high version, a <link>, no <enclosure>,
+// and an empty-element <sparkle:informationalUpdate>.
+const informationalFeed = `<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>BurnMeter</title>
+    <item>
+      <title>Reactivate your access</title>
+      <description><![CDATA[<p>Your access has expired or been revoked, so updates are paused.</p>]]></description>
+      <sparkle:version>999000000</sparkle:version>
+      <sparkle:shortVersionString>Access renewal</sparkle:shortVersionString>
+      <sparkle:informationalUpdate></sparkle:informationalUpdate>
+      <link>https://example.invalid/access</link>
+    </item>
+  </channel>
+</rss>`
+
+func TestParseInformationalItem(t *testing.T) {
+	base, _ := url.Parse("https://dl.example/feed/appcast.xml")
+	items, err := ParseAppcast([]byte(informationalFeed), base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("got %d items, want 1: %+v", len(items), items)
+	}
+	it := items[0]
+	if !it.Informational {
+		t.Error("empty-element <sparkle:informationalUpdate> not detected")
+	}
+	if it.Version != 999000000 || it.ShortVersion != "Access renewal" {
+		t.Errorf("version fields: %+v", it)
+	}
+	if it.Title != "Reactivate your access" {
+		t.Errorf("title: %q", it.Title)
+	}
+	if !strings.Contains(it.Description, "updates are paused") {
+		t.Errorf("description (CDATA) not carried: %q", it.Description)
+	}
+	if it.Link != "https://example.invalid/access" {
+		t.Errorf("link: %q", it.Link)
+	}
+	if it.EnclosureURL != "" || len(it.BelowVersions) != 0 {
+		t.Errorf("unexpected enclosure/belowVersion: %+v", it)
+	}
+}
+
+// The self-closing form must parse identically to the empty-element form, and a
+// relative <link> resolves against the feed base like an enclosure URL does.
+func TestParseInformationalSelfClosing(t *testing.T) {
+	selfClosing := strings.Replace(informationalFeed,
+		"<sparkle:informationalUpdate></sparkle:informationalUpdate>",
+		"<sparkle:informationalUpdate/>", 1)
+	if selfClosing == informationalFeed {
+		t.Fatal("fixture rewrite did not apply")
+	}
+	base, _ := url.Parse("https://dl.example/feed/appcast.xml")
+	empty, err := ParseAppcast([]byte(informationalFeed), base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	self, err := ParseAppcast([]byte(selfClosing), base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(self) != 1 || !reflect.DeepEqual(self, empty) {
+		t.Fatalf("self-closing parsed differently:\n self: %+v\nempty: %+v", self, empty)
+	}
+
+	rel := strings.Replace(informationalFeed,
+		"<link>https://example.invalid/access</link>", "<link>access</link>", 1)
+	items, err := ParseAppcast([]byte(rel), base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if items[0].Link != "https://dl.example/feed/access" {
+		t.Errorf("relative link not resolved: %q", items[0].Link)
+	}
+}
+
+// belowVersion narrows an informational item to installs below a given build.
+func TestInformationalBelowVersion(t *testing.T) {
+	feed := strings.Replace(informationalFeed,
+		"<sparkle:informationalUpdate></sparkle:informationalUpdate>",
+		"<sparkle:informationalUpdate><sparkle:belowVersion>50</sparkle:belowVersion>"+
+			"<sparkle:belowVersion>x.y</sparkle:belowVersion></sparkle:informationalUpdate>", 1)
+	items, err := ParseAppcast([]byte(feed), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The non-numeric entry is dropped; eligibility rides on the build number.
+	if got := items[0].BelowVersions; len(got) != 1 || got[0] != 50 {
+		t.Fatalf("belowVersion: %v", got)
+	}
+	if rel := pickBest(items, Config{InstalledVersion: 49}); rel == nil || !rel.Informational {
+		t.Fatalf("installed below belowVersion should be offered: %+v", rel)
+	}
+	if rel := pickBest(items, Config{InstalledVersion: 50}); rel != nil {
+		t.Fatalf("installed at/above belowVersion should be skipped: %+v", rel)
+	}
+	// No belowVersion children: applies to every install.
+	plain, _ := ParseAppcast([]byte(informationalFeed), nil)
+	if rel := pickBest(plain, Config{InstalledVersion: 50}); rel == nil {
+		t.Fatal("informational item without belowVersion should apply to any install")
+	}
+}
+
+// pickBest's enclosure rule: informational items are exempt, everything else is
+// not, and the highest version still wins over an informational item.
+func TestPickBestInformational(t *testing.T) {
+	base, _ := url.Parse("https://dl.example/appcast.xml")
+	info, _ := ParseAppcast([]byte(informationalFeed), base)
+
+	rel := pickBest(info, Config{InstalledVersion: 10})
+	if rel == nil {
+		t.Fatal("informational item was discarded")
+	}
+	if !rel.Informational || rel.Link != "https://example.invalid/access" || rel.URL != "" {
+		t.Fatalf("release fields: %+v", rel)
+	}
+	// Not newer than installed: skipped like any other item.
+	if rel := pickBest(info, Config{InstalledVersion: 999000000}); rel != nil {
+		t.Fatalf("informational item at/below installed should be skipped: %+v", rel)
+	}
+	// A non-informational item with no usable enclosure is still skipped.
+	noEnclosure := strings.Replace(informationalFeed,
+		"<sparkle:informationalUpdate></sparkle:informationalUpdate>", "", 1)
+	plain, _ := ParseAppcast([]byte(noEnclosure), base)
+	if rel := pickBest(plain, Config{InstalledVersion: 10}); rel != nil {
+		t.Fatalf("enclosure-less non-informational item admitted: %+v", rel)
+	}
+
+	// Both kinds in one feed: highest version wins, deliberately. The
+	// informational item's 999000000 outranks the real 20, so the caller is
+	// told about the lapsed access rather than offered a download it cannot
+	// authorize.
+	both, _ := ParseAppcast([]byte(mixedFeed), base)
+	if len(both) != 2 {
+		t.Fatalf("mixed feed parsed %d items", len(both))
+	}
+	rel = pickBest(both, Config{InstalledVersion: 10})
+	if rel == nil || !rel.Informational || rel.Version != 999000000 {
+		t.Fatalf("highest version should win: %+v", rel)
+	}
+	// Drop the informational item below the real one and the download wins.
+	lower, _ := ParseAppcast([]byte(strings.Replace(mixedFeed, "999000000", "15", 1)), base)
+	rel = pickBest(lower, Config{InstalledVersion: 10})
+	if rel == nil || rel.Informational || rel.Version != 20 {
+		t.Fatalf("real update should win when it is newer: %+v", rel)
+	}
+}
+
+// An informational item alongside a genuine downloadable update.
+const mixedFeed = `<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>App</title>
+    <item>
+      <title>Reactivate your access</title>
+      <sparkle:version>999000000</sparkle:version>
+      <sparkle:informationalUpdate/>
+      <link>https://example.invalid/access</link>
+    </item>
+    <item>
+      <title>App 2.0</title>
+      <sparkle:version>20</sparkle:version>
+      <sparkle:shortVersionString>2.0</sparkle:shortVersionString>
+      <enclosure url="https://dl.example/App-2.0.zip" length="222" type="application/zip" sparkle:edSignature="c2ln"/>
+    </item>
+  </channel>
+</rss>`
 
 func TestChannelAdmitted(t *testing.T) {
 	if !channelAdmitted("", "beta") {

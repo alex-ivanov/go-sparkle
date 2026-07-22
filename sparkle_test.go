@@ -109,6 +109,54 @@ func TestCheckUpToDate(t *testing.T) {
 	}
 }
 
+// A gated feed answering 200 with an informational item must surface as a
+// non-nil Release (not "you're up to date"), and Download must refuse it
+// without touching the network.
+func TestCheckInformationalUpdate(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		w.Write([]byte(informationalFeed))
+	}))
+	defer srv.Close()
+
+	up := New(Config{FeedURL: srv.URL, PublicEDKey: "cHVia2V5", InstalledVersion: 42, HTTPClient: srv.Client()})
+	rel, err := up.Check(context.Background(), "t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rel == nil {
+		t.Fatal("informational item reported as up to date - the misleading outcome this exists to prevent")
+	}
+	if !rel.Informational {
+		t.Errorf("Informational not set: %+v", rel)
+	}
+	if rel.Version != 999000000 || rel.Title != "Reactivate your access" {
+		t.Errorf("release fields: %+v", rel)
+	}
+	if rel.Link != "https://example.invalid/access" {
+		t.Errorf("link: %q", rel.Link)
+	}
+	if !strings.Contains(rel.Notes, "updates are paused") {
+		t.Errorf("notes: %q", rel.Notes)
+	}
+
+	// Download must not issue a request at all.
+	tripwire := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("Download hit the network for an informational release: %s", r.URL)
+	}))
+	defer tripwire.Close()
+	dl := New(Config{PublicEDKey: "cHVia2V5", HTTPClient: tripwire.Client()})
+	if _, err := dl.Download(context.Background(), rel, "t"); err != ErrInformationalUpdate {
+		t.Fatalf("Download: want ErrInformationalUpdate, got %v", err)
+	}
+	// Even with a URL glued on, the flag alone refuses the download.
+	armed := *rel
+	armed.URL = tripwire.URL + "/artifact.zip"
+	if _, err := dl.Download(context.Background(), &armed, "t"); err != ErrInformationalUpdate {
+		t.Fatalf("Download with URL: want ErrInformationalUpdate, got %v", err)
+	}
+}
+
 func TestDownloadRejectsSizeMismatchAndTamper(t *testing.T) {
 	kp, _ := GenerateKeys()
 	good := []byte("good bytes")

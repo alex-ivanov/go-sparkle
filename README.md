@@ -52,7 +52,10 @@ up := sparkle.New(sparkle.Config{
 })
 
 rel, err := up.Check(ctx, token)  // nil when up to date; ErrUnauthorized on 401/403
-if rel != nil {
+if rel != nil && rel.Informational {
+    // News, not an artifact: show rel.Title / rel.Notes, open rel.Link.
+    // Do NOT call Download.
+} else if rel != nil {
     path, err := up.Download(ctx, rel, token) // Bearer + length + ed25519 verified
     app, err := sparkle.Apply(path)           // macOS: swap the .app in place + relaunch
     _ = app
@@ -65,6 +68,35 @@ an absolute `http(s)` URL. `Download` verifies the declared length and the
 ed25519 signature before returning the file. On macOS, `Apply` `ditto`-extracts
 the `.app` from the zip, rename-swaps it over the running bundle (safe while
 running), and relaunches; `CleanupBackups` clears the `.bak` on next launch.
+
+### Informational updates
+
+A feed can answer 200 with a `<sparkle:informationalUpdate>` item — news with a
+`<link>` and **no `<enclosure>`**. A gated service uses this to say "this
+install's access has lapsed" without offering a download:
+
+```xml
+<item>
+  <title>Reactivate your access</title>
+  <description><![CDATA[<p>Updates are paused.</p>]]></description>
+  <sparkle:version>999000000</sparkle:version>
+  <sparkle:informationalUpdate/>
+  <link>https://example.com/access</link>
+</item>
+```
+
+`Check` returns it as a `Release` with `Informational` set, `Link` resolved
+against the feed, and an empty `URL`; `Download` refuses it with
+`ErrInformationalUpdate` **before making any request**, so it can never be
+mistaken for an installable artifact. `<sparkle:belowVersion>` children are
+honored: the item is offered only to installs below one of those builds.
+
+> **Behavior change in v1.1.0.** Before v1.1.0 such an item was silently
+> discarded and `Check` returned `nil` — the app told the user "You're up to
+> date", the most misleading possible outcome. It now returns a non-nil
+> `Release`. A caller that does not check `.Informational` and calls `Download`
+> gets `ErrInformationalUpdate` instead of silently doing nothing. Existing
+> callers should add the `rel.Informational` branch shown above.
 
 ### Token-gated feeds
 
@@ -146,12 +178,14 @@ volume name matches one the user already has open does not collide.
 Implemented: appcast parse (namespaced `sparkle:` elements, item- and
 enclosure-attribute version forms, relative enclosure URLs resolved against the
 feed, `sparkle:channel`, `minimumSystemVersion`, non-`http(s)` enclosure
-rejection); ed25519 verify; token-gated check/download; macOS `.app` swap +
-relaunch from a `.zip` or `.dmg`; key/sign/feed generation.
+rejection, `sparkle:informationalUpdate` + `sparkle:belowVersion` + `<link>`);
+ed25519 verify; token-gated check/download; macOS `.app` swap + relaunch from a
+`.zip` or `.dmg`; key/sign/feed generation.
 
 Not implemented (open a PR if you need them): delta updates, phased rollout,
 critical updates, localized release-notes selection, DSA (legacy Sparkle 1.x)
-signatures.
+signatures. The feed writer (`RenderAppcast` / `sparkle appcast`) emits normal
+update items only — informational feeds are read, not generated.
 
 ## License
 

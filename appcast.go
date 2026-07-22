@@ -20,6 +20,22 @@ type Item struct {
 	EnclosureURL         string // enclosure url (resolved absolute)
 	EnclosureLength      int64  // enclosure length attr (0 = absent)
 	EDSignature          string // enclosure sparkle:edSignature (base64)
+
+	// Informational is true when <sparkle:informationalUpdate> is present on
+	// the item (presence alone is the signal; the element is usually empty).
+	// Such an item carries news, not an artifact: it has no <enclosure>, and
+	// the client should show Title/Description and send the user to Link.
+	Informational bool
+	// Link is the item's <link>, resolved against the feed base. For an
+	// informational item this is where the user is sent (e.g. a reactivation
+	// page).
+	Link string
+	// BelowVersions holds the <sparkle:belowVersion> children of
+	// <sparkle:informationalUpdate>: the item is informational only for
+	// installs below one of these builds. Empty means it applies to every
+	// install. Non-numeric entries (Sparkle permits dotted short versions
+	// here) are dropped, since eligibility is decided on the integer build.
+	BelowVersions []int
 }
 
 // rawAppcast mirrors the on-wire Sparkle RSS. encoding/xml matches by local
@@ -34,7 +50,14 @@ type rawAppcast struct {
 		ShortVersion string `xml:"shortVersionString"` // <sparkle:shortVersionString>
 		Channel      string `xml:"channel"`            // <sparkle:channel>
 		MinSystem    string `xml:"minimumSystemVersion"`
-		Enclosure    struct {
+		Link         string `xml:"link"`
+		// A pointer so presence is detectable: both <sparkle:informationalUpdate/>
+		// and <sparkle:informationalUpdate></sparkle:informationalUpdate> yield a
+		// non-nil value, while an absent element leaves it nil.
+		Informational *struct {
+			BelowVersion []string `xml:"belowVersion"`
+		} `xml:"informationalUpdate"`
+		Enclosure struct {
 			URL          string `xml:"url,attr"`
 			Length       string `xml:"length,attr"`
 			Version      string `xml:"version,attr"` // sparkle:version on <enclosure>
@@ -77,6 +100,15 @@ func ParseAppcast(data []byte, base *url.URL) ([]Item, error) {
 			EnclosureURL:         resolveURL(base, strings.TrimSpace(r.Enclosure.URL)),
 			EnclosureLength:      parseLen(r.Enclosure.Length),
 			EDSignature:          strings.TrimSpace(r.Enclosure.EDSignature),
+			Link:                 resolveURL(base, strings.TrimSpace(r.Link)),
+		}
+		if r.Informational != nil {
+			it.Informational = true
+			for _, bv := range r.Informational.BelowVersion {
+				if n, err := strconv.Atoi(strings.TrimSpace(bv)); err == nil {
+					it.BelowVersions = append(it.BelowVersions, n)
+				}
+			}
 		}
 		items = append(items, it)
 	}
@@ -114,6 +146,22 @@ func osMeetsMinimum(osVersion, minimum string) bool {
 		return true
 	}
 	return compareDotted(osVersion, minimum) >= 0
+}
+
+// informationalApplies reports whether an informational item is meant for this
+// install. With no <sparkle:belowVersion> children it applies to every install;
+// otherwise it applies only when the installed build is below at least one of
+// them. Non-informational items are unaffected.
+func informationalApplies(it *Item, installed int) bool {
+	if !it.Informational || len(it.BelowVersions) == 0 {
+		return true
+	}
+	for _, bv := range it.BelowVersions {
+		if installed < bv {
+			return true
+		}
+	}
+	return false
 }
 
 // compareDotted compares dotted-numeric versions ("14.4" vs "14.4.1"). Missing

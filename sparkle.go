@@ -15,6 +15,25 @@
 // download Authorization header) is supported for private or gated
 // distribution: put <TOKEN> and <CFBundleVersion> placeholders in the feed URL
 // and pass the token to Check/Download.
+//
+// # Informational updates
+//
+// A feed may answer with a <sparkle:informationalUpdate> item: news with a
+// <link> and no <enclosure>, which a gated service uses to say "this install's
+// access has lapsed" without offering a download. Check returns such an item as
+// a Release with Informational set, so callers must distinguish it from an
+// installable update:
+//
+//	rel, err := up.Check(ctx, token)
+//	if rel != nil && rel.Informational {
+//		// show rel.Title / rel.Notes; open rel.Link. Do NOT call Download.
+//	}
+//
+// Since v1.1.0 this changes what an existing caller observes: a feed serving an
+// informational item used to yield a nil Release ("up to date") and now yields a
+// non-nil one. A caller that ignores Informational and calls Download gets
+// ErrInformationalUpdate before any request is made, rather than silently
+// telling the user nothing is available.
 package sparkle
 
 import (
@@ -33,6 +52,11 @@ import (
 // ErrUnauthorized is returned when the feed or download gate rejects the
 // request (HTTP 401/403): the access token is missing, revoked, or expired.
 var ErrUnauthorized = errors.New("update access denied - the token is missing, revoked, or expired")
+
+// ErrInformationalUpdate is returned by Download for a Release that carries no
+// artifact (a <sparkle:informationalUpdate> item). Show it to the user and open
+// its Link instead.
+var ErrInformationalUpdate = errors.New("informational update: nothing to download")
 
 // Config configures an Updater. Only FeedURL + PublicEDKey are required to
 // check and verify; InstalledVersion gates what counts as "newer".
@@ -79,9 +103,17 @@ type Release struct {
 	Title        string
 	Notes        string // <description> (release notes)
 	Channel      string // sparkle:channel ("" = release)
-	URL          string // enclosure url (absolute)
+	URL          string // enclosure url (absolute; empty on an informational item)
 	Length       int64  // enclosure length in bytes (0 = unknown)
 	EDSignature  string // base64 ed25519 signature of the artifact bytes
+
+	// Informational reports a <sparkle:informationalUpdate> item: news, not an
+	// artifact. Show Title/Notes and send the user to Link; Download refuses it
+	// with ErrInformationalUpdate.
+	Informational bool
+	// Link is the item's <link> (absolute) - where an informational item sends
+	// the user.
+	Link string
 }
 
 // Check fetches the token-gated appcast and returns the newest eligible
@@ -129,6 +161,11 @@ func (u *Updater) Check(ctx context.Context, token string) (*Release, error) {
 // verifies the ed25519 signature against the configured public key, and writes
 // it to a temp file. The caller removes the file when done.
 func (u *Updater) Download(ctx context.Context, rel *Release, token string) (string, error) {
+	// An informational item has no artifact: refuse before touching the
+	// network, so it can never be mistaken for something installable.
+	if rel.Informational || strings.TrimSpace(rel.URL) == "" {
+		return "", ErrInformationalUpdate
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rel.URL, nil)
 	if err != nil {
 		return "", err
@@ -207,7 +244,12 @@ func pickBest(items []Item, cfg Config) *Release {
 		if !osMeetsMinimum(cfg.OSVersion, it.MinimumSystemVersion) {
 			continue
 		}
-		if !isDownloadURL(it.EnclosureURL) {
+		// An informational item legitimately has no enclosure; everything
+		// else must carry a usable download URL.
+		if !isDownloadURL(it.EnclosureURL) && !it.Informational {
+			continue
+		}
+		if !informationalApplies(it, cfg.InstalledVersion) {
 			continue
 		}
 		if best == nil || it.Version > best.Version {
@@ -217,16 +259,24 @@ func pickBest(items []Item, cfg Config) *Release {
 	if best == nil {
 		return nil
 	}
-	return &Release{
-		Version:      best.Version,
-		ShortVersion: best.ShortVersion,
-		Title:        best.Title,
-		Notes:        best.Description,
-		Channel:      best.Channel,
-		URL:          best.EnclosureURL,
-		Length:       best.EnclosureLength,
-		EDSignature:  best.EDSignature,
+	rel := &Release{
+		Version:       best.Version,
+		ShortVersion:  best.ShortVersion,
+		Title:         best.Title,
+		Notes:         best.Description,
+		Channel:       best.Channel,
+		URL:           best.EnclosureURL,
+		Length:        best.EnclosureLength,
+		EDSignature:   best.EDSignature,
+		Informational: best.Informational,
+		Link:          best.Link,
 	}
+	// Never hand back a URL that is not a real download target (an
+	// informational item may carry none, or a bogus one).
+	if !isDownloadURL(rel.URL) {
+		rel.URL = ""
+	}
+	return rel
 }
 
 // channelAdmitted reports whether an item's channel is offered to a client on
