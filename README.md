@@ -123,7 +123,8 @@ The key comes from `-f`/`--ed-key-file` (a base64 ed25519 private key file, or
 — the login Keychain (`--account`, default `ed25519`), exactly where Sparkle's
 `generate_keys` stores it. `-p` prints only the signature; `--verify <archive>
 <sig>` verifies. Its keys are interchangeable with Sparkle's (both are base64
-64-byte ed25519 keys). Signing XML feeds in place and release-notes warnings are
+64-byte seed||public ed25519 keys); a bare 32-byte ed25519 seed, as emitted by
+most other ed25519 tooling, is accepted too. Signing XML feeds in place and release-notes warnings are
 not implemented — sign archives/pkgs/deltas here, and render feeds with the
 appcast writer above.
 

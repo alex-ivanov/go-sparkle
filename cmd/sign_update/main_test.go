@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -157,4 +159,61 @@ func itoa(n int) string {
 		n /= 10
 	}
 	return string(b)
+}
+
+// A publishing service may hand over the bare 32-byte ed25519 seed rather than
+// Sparkle's 64-byte seed||public key. Signing and --verify must both work with
+// it, and produce the same signature as the full key.
+func TestSeedOnlyKeyFile(t *testing.T) {
+	kp, err := sparkle.GenerateKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	full, err := base64.StdEncoding.DecodeString(kp.Private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	seedFile := filepath.Join(dir, "seed.key")
+	seedB64 := base64.StdEncoding.EncodeToString(full[:ed25519.SeedSize])
+	if err := os.WriteFile(seedFile, []byte(seedB64+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fullFile := filepath.Join(dir, "full.key")
+	if err := os.WriteFile(fullFile, []byte(kp.Private+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	data := []byte("PK\x03\x04 artifact signed with a seed")
+	f := filepath.Join(dir, "App-1.0.zip")
+	if err := os.WriteFile(f, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sign := func(keyFile string) string {
+		t.Helper()
+		opt, err := parseArgs([]string{"-p", "-f", keyFile, f})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out bytes.Buffer
+		if err := run(opt, &out); err != nil {
+			t.Fatalf("signing with %s: %v", filepath.Base(keyFile), err)
+		}
+		return string(bytes.TrimSpace(out.Bytes()))
+	}
+
+	seedSig, fullSig := sign(seedFile), sign(fullFile)
+	if seedSig != fullSig {
+		t.Fatalf("seed key signature differs from full key signature\n seed %s\n full %s", seedSig, fullSig)
+	}
+	if err := sparkle.VerifySignature(kp.Public, seedSig, data); err != nil {
+		t.Fatalf("seed-signed artifact does not verify: %v", err)
+	}
+
+	// --verify derives the public key from the seed too.
+	verOpt, _ := parseArgs([]string{"--verify", f, seedSig, "-f", seedFile})
+	if err := run(verOpt, &bytes.Buffer{}); err != nil {
+		t.Fatalf("--verify with a seed key failed: %v", err)
+	}
 }

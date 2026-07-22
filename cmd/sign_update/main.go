@@ -5,8 +5,10 @@
 //	sign_update [--account NAME] [-f|--ed-key-file FILE] [-s KEY] [-p] <archive>
 //	sign_update --verify <archive> <base64-signature> [-f FILE]
 //
-// The EdDSA (ed25519) private key comes from --ed-key-file (a base64 64-byte
-// key file, or "-" to read from stdin), the deprecated -s inline key, or - on
+// The EdDSA (ed25519) private key comes from --ed-key-file (a base64 key file
+// holding either the 64-byte seed||public key that Sparkle's generate_keys
+// emits or a bare 32-byte seed, or "-" to read from stdin), the deprecated -s
+// inline key, or - on
 // macOS with no key given - the login Keychain (service
 // https://sparkle-project.org, the --account name, default "ed25519"), exactly
 // where Sparkle's generate_keys stores it. Signing an archive prints:
@@ -177,17 +179,24 @@ func resolveKey(opt options) (string, error) {
 	}
 }
 
-// publicFromPrivate extracts the base64 public key from a base64 64-byte
-// ed25519 private key (seed||public), for --verify.
+// publicFromPrivate extracts the base64 public key from a base64 ed25519
+// private key, for --verify. Accepts both the 64-byte seed||public encoding
+// and the bare 32-byte seed, matching sparkle.SignArtifact.
 func publicFromPrivate(privB64 string) (string, error) {
 	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(privB64))
 	if err != nil {
 		return "", fmt.Errorf("decoding private key: %w", err)
 	}
-	if len(raw) != ed25519.PrivateKeySize {
-		return "", fmt.Errorf("private key is %d bytes, want %d", len(raw), ed25519.PrivateKeySize)
+	var priv ed25519.PrivateKey
+	switch len(raw) {
+	case ed25519.SeedSize:
+		priv = ed25519.NewKeyFromSeed(raw)
+	case ed25519.PrivateKeySize:
+		priv = ed25519.PrivateKey(raw)
+	default:
+		return "", fmt.Errorf("private key is %d bytes, want %d or %d", len(raw), ed25519.SeedSize, ed25519.PrivateKeySize)
 	}
-	pub := ed25519.PrivateKey(raw).Public().(ed25519.PublicKey)
+	pub := priv.Public().(ed25519.PublicKey)
 	return base64.StdEncoding.EncodeToString(pub), nil
 }
 

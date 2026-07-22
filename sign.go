@@ -32,14 +32,24 @@ func GenerateKeys() (KeyPair, error) {
 // the base64 signature for the appcast's sparkle:edSignature. Same EdDSA-over-
 // file-bytes scheme as Sparkle's sign_update, so VerifySignature (and Sparkle
 // itself) accept the result.
+//
+// Both ed25519 private-key encodings are accepted: the 64-byte seed||public
+// form that Sparkle's generate_keys emits, and the bare 32-byte seed that most
+// other ed25519 tooling emits. They produce identical signatures.
 func SignArtifact(privKeyB64 string, data []byte) (string, error) {
 	raw, err := base64.StdEncoding.DecodeString(privKeyB64)
 	if err != nil {
 		return "", fmt.Errorf("decoding private key: %w", err)
 	}
-	if len(raw) != ed25519.PrivateKeySize {
-		return "", fmt.Errorf("private key is %d bytes, want %d", len(raw), ed25519.PrivateKeySize)
+	var priv ed25519.PrivateKey
+	switch len(raw) {
+	case ed25519.SeedSize: // 32 - raw seed
+		priv = ed25519.NewKeyFromSeed(raw)
+	case ed25519.PrivateKeySize: // 64 - seed||public, Sparkle's generate_keys
+		priv = ed25519.PrivateKey(raw)
+	default:
+		return "", fmt.Errorf("private key is %d bytes, want %d or %d", len(raw), ed25519.SeedSize, ed25519.PrivateKeySize)
 	}
-	sig := ed25519.Sign(ed25519.PrivateKey(raw), data)
+	sig := ed25519.Sign(priv, data)
 	return base64.StdEncoding.EncodeToString(sig), nil
 }
